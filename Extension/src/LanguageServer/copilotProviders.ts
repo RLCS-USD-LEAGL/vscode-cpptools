@@ -6,8 +6,9 @@
 
 import * as vscode from 'vscode';
 import * as util from '../common';
-import { ChatContextResult, GetIncludesResult } from './client';
+import { GetIncludesResult } from './client';
 import { getActiveClient } from './extension';
+import { getProjectContext } from './lmTool';
 
 export interface CopilotTrait {
     name: string;
@@ -38,22 +39,54 @@ export async function registerRelatedFilesProvider(): Promise<void> {
 
                         const getIncludesHandler = async () => (await getIncludesWithCancellation(1, token))?.includedFiles.map(file => vscode.Uri.file(file)) ?? [];
                         const getTraitsHandler = async () => {
-                            const chatContext: ChatContextResult | undefined = await (getActiveClient().getChatContext(token) ?? undefined);
+                            const cppContext = await getProjectContext(context, token);
 
-                            if (!chatContext) {
+                            if (!cppContext) {
                                 return undefined;
                             }
 
                             let traits: CopilotTrait[] = [
-                                { name: "language", value: chatContext.language, includeInPrompt: true, promptTextOverride: `The language is ${chatContext.language}.` },
-                                { name: "compiler", value: chatContext.compiler, includeInPrompt: true, promptTextOverride: `This project compiles using ${chatContext.compiler}.` },
-                                { name: "standardVersion", value: chatContext.standardVersion, includeInPrompt: true, promptTextOverride: `This project uses the ${chatContext.standardVersion} language standard.` },
-                                { name: "targetPlatform", value: chatContext.targetPlatform, includeInPrompt: true, promptTextOverride: `This build targets ${chatContext.targetPlatform}.` },
-                                { name: "targetArchitecture", value: chatContext.targetArchitecture, includeInPrompt: true, promptTextOverride: `This build targets ${chatContext.targetArchitecture}.` }
+                                { name: "intelliSenseDisclaimer", value: '', includeInPrompt: true, promptTextOverride: `IntelliSense is currently configured with the following compiler information. It reflects the active configuration, and the project may have more configurations targeting different platforms.` },
+                                { name: "intelliSenseDisclaimerBeginning", value: '', includeInPrompt: true, promptTextOverride: `Beginning of IntelliSense information.` }
                             ];
+                            if (cppContext.language) {
+                                traits.push({ name: "language", value: cppContext.language, includeInPrompt: true, promptTextOverride: `The language is ${cppContext.language}.` });
+                            }
+                            if (cppContext.compiler) {
+                                traits.push({ name: "compiler", value: cppContext.compiler, includeInPrompt: true, promptTextOverride: `This project compiles using ${cppContext.compiler}.` });
+                            }
+                            if (cppContext.standardVersion) {
+                                traits.push({ name: "standardVersion", value: cppContext.standardVersion, includeInPrompt: true, promptTextOverride: `This project uses the ${cppContext.standardVersion} language standard.` });
+                            }
+                            if (cppContext.targetPlatform) {
+                                traits.push({ name: "targetPlatform", value: cppContext.targetPlatform, includeInPrompt: true, promptTextOverride: `This build targets ${cppContext.targetPlatform}.` });
+                            }
+                            if (cppContext.targetArchitecture) {
+                                traits.push({ name: "targetArchitecture", value: cppContext.targetArchitecture, includeInPrompt: true, promptTextOverride: `This build targets ${cppContext.targetArchitecture}.` });
+                            }
+                            let directAsks: string = '';
+                            if (cppContext.compilerArguments.length > 0) {
+                                // Example: JSON.stringify({'-fno-rtti': "Do not generate code using RTTI keywords."})
+                                const directAskMap: { [key: string]: string } = JSON.parse(context.flags.copilotcppCompilerArgumentDirectAskMap as string ?? '{}');
+                                const updatedArguments = cppContext.compilerArguments.filter(arg => {
+                                    if (directAskMap[arg]) {
+                                        directAsks += `${directAskMap[arg]} `;
+                                        return false;
+                                    }
+                                    return true;
+                                });
 
-                            const excludeTraits = context.flags.copilotcppExcludeTraits as string[] ?? [];
-                            traits = traits.filter(trait => !excludeTraits.includes(trait.name));
+                                const compilerArgumentsValue = updatedArguments.join(", ");
+                                traits.push({ name: "compilerArguments", value: compilerArgumentsValue, includeInPrompt: true, promptTextOverride: `The compiler arguments include: ${compilerArgumentsValue}.` });
+                            }
+                            if (directAsks) {
+                                traits.push({ name: "directAsks", value: directAsks, includeInPrompt: true, promptTextOverride: directAsks });
+                            }
+
+                            traits.push({ name: "intelliSenseDisclaimerEnd", value: '', includeInPrompt: true, promptTextOverride: `End of IntelliSense information.` });
+
+                            const excludeTraits = new Set(context.flags.copilotcppExcludeTraits as string[] ?? []);
+                            traits = traits.filter(trait => !excludeTraits.has(trait.name));
 
                             return traits.length > 0 ? traits : undefined;
                         };
